@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Página Protegida</title>
+    <link rel="stylesheet" href="/css/main.css">
+    <!--
+        session-check.js deve ser o PRIMEIRO script carregado.
+        Ele oculta a página, verifica a sessão PHP e redireciona
+        para /Auth/login.html caso o usuário não esteja autenticado.
+        Após a verificação, expõe os dados em window.__session.
+    -->
+    <script src="/js/Auth/session-check.js"></script>
+</head>
+<body>
+
+    <header class="header">
+        <span>Olá, <strong id="nome-usuario"></strong></span>
+        <button onclick="logout()" class="btn-logout">Sair</button>
+    </header>
+
+    <main>
+        <h1>Área protegida</h1>
+        <p>Você só vê esta página porque está autenticado.</p>
+        <p><a href="/">← Voltar ao início</a></p>
+    </main>
+
+    <script src="/js/main.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const el = document.getElementById('nome-usuario');
+            if (el && window.__session) el.textContent = window.__session.usuario;
+        });
+    </script>
+</body>
+</html>

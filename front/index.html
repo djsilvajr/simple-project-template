@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Início</title>
+    <link rel="stylesheet" href="/css/main.css">
+</head>
+<body>
+
+    <header class="header">
+        <span>Olá, <strong id="nome-usuario"></strong></span>
+        <nav class="header-nav">
+            <a href="/Auth/login.html">Entrar</a>
+            <button onclick="logout()" class="btn-logout">Sair</button>
+        </nav>
+    </header>
+
+    <main>
+        <h1>Página inicial pública</h1>
+        <p>Esta página é acessível sem autenticação.</p>
+
+        <section class="examples">
+            <h2>Exemplos de controle de acesso</h2>
+            <ul>
+                <li>
+                    <a href="/test/auth-needed.html">Página protegida</a>
+                    — redireciona para login se não autenticado
+                </li>
+                <li>
+                    <a href="/test/non-auth-needed.html">Página pública</a>
+                    — acessível por qualquer visitante
+                </li>
+            </ul>
+        </section>
+    </main>
+
+    <script src="/js/main.js"></script>
+</body>
+</html>

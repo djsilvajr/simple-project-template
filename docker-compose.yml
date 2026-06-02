@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ${PROJECT_NAME:-app}_nginx
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./front:/var/www/front:ro
+    depends_on:
+      - back
+      - front
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  back:
+    build:
+      context: ./docker/back
+    container_name: ${PROJECT_NAME:-app}_back
+    volumes:
+      - ./back:/var/www/back
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  front:
+    build:
+      context: ./docker/front
+    container_name: ${PROJECT_NAME:-app}_front
+    volumes:
+      - ./front:/var/www/front
+    environment:
+      API_BASE_URL: http://nginx/api
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: ${PROJECT_NAME:-app}_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d:ro
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${DB_PORT_EXPOSE:-3306}:3306"
+    networks:
+      - app_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${PROJECT_NAME:-app}_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT_EXPOSE:-6379}:6379"
+    networks:
+      - app_network
+    restart: unless-stopped
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:

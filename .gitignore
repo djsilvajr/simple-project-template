@@ -1,0 +1,18 @@
+# Ambiente
+.env
+
+# Dados persistentes dos containers
+db/*.sql
+redis/
+
+# Dependências
+**/vendor/
+**/node_modules/
+
+# Editores e IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

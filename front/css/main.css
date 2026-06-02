@@ -1,0 +1,85 @@
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #f3f4f6;
+    color: #111827;
+    min-height: 100vh;
+}
+
+/* ---------- Dashboard ---------- */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 2rem;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+
+.btn-logout {
+    padding: .4rem .9rem;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: .875rem;
+    transition: background .15s;
+}
+
+.btn-logout:hover {
+    background: #f3f4f6;
+}
+
+main {
+    padding: 2rem;
+}
+
+.header-nav {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header a {
+    font-size: .875rem;
+    color: #6366f1;
+    text-decoration: none;
+}
+
+.header a:hover {
+    text-decoration: underline;
+}
+
+/* ---------- Página inicial / exemplos ---------- */
+.examples {
+    margin-top: 2rem;
+}
+
+.examples h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: .75rem;
+    color: #374151;
+}
+
+.examples ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+}
+
+.examples li a {
+    color: #6366f1;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.examples li a:hover {
+    text-decoration: underline;
+}

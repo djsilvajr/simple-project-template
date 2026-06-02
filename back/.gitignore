@@ -1,0 +1,8 @@
+# Ambiente
+.env
+
+# Dependências do Composer
+vendor/
+
+# Cache do Composer
+.php-cs-fixer.cache
