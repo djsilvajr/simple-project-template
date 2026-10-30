@@ -11,7 +11,11 @@
 
     <header class="header">
         <span>Página pública</span>
-        <a href="/Auth/login.html">Entrar</a>
+        <nav class="header-nav">
+            <span data-auth="user" hidden>Olá, <strong id="nome-usuario"></strong></span>
+            <a href="/Auth/login.html" data-auth="guest" hidden>Entrar</a>
+            <button onclick="logout()" class="btn-logout" data-auth="user" hidden>Sair</button>
+        </nav>
     </header>
 
     <main>
@@ -20,5 +24,6 @@
         <p><a href="/">← Voltar ao início</a></p>
     </main>
 
+    <script src="/js/main.js"></script>
 </body>
 </html>

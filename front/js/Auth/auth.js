@@ -7,8 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
         erro.textContent = '';
 
         const payload = {
-            email: document.getElementById('email').value.trim(),
-            senha: document.getElementById('senha').value,
+            login:    document.getElementById('login').value.trim(),
+            password: document.getElementById('senha').value,
         };
 
         try {

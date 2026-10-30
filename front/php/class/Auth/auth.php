@@ -2,27 +2,30 @@
 
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/../helper/Session.php';
+
+Session::start();
 
 header('Content-Type: application/json; charset=utf-8');
 
-require_once __DIR__ . '/../helper/CurlHelper.php';
-
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
-$email = trim($input['email'] ?? '');
-$senha = $input['senha'] ?? '';
+$login    = trim($input['login'] ?? '');
+$password = $input['password'] ?? '';
 
-if ($email === '' || $senha === '') {
+if ($login === '' || $password === '') {
     http_response_code(422);
-    echo json_encode(['status' => false, 'message' => 'Email e senha são obrigatórios.']);
+    echo json_encode(['status' => false, 'message' => 'Login e senha são obrigatórios.']);
     exit;
 }
 
 $curl     = new CurlHelper();
-$response = $curl->post('/auth/login', ['email' => $email, 'senha' => $senha]);
+$response = $curl->post('/auth/login', ['login' => $login, 'password' => $password]);
 
 if ($response['status'] === 200 && !empty($response['body']['status'])) {
-    $_SESSION['user'] = $response['body']['data'];
+    session_regenerate_id(true);
+
+    Session::storeAuth($response['body']['data']);  // user + JWT para chamar rotas protegidas da API
+
     echo json_encode(['status' => true]);
     exit;
 }

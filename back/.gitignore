@@ -1,8 +1,9 @@
 # Ambiente
 .env
 
-# Dependências do Composer
-vendor/
+# Binários (go build -o bin/ ./cmd/...)
+/bin/
 
-# Cache do Composer
-.php-cs-fixer.cache
+# Testes / cobertura
+*.test
+*.out

@@ -1,6 +1,6 @@
 # Simple Project Template
 
-Template PHP full-stack com arquitetura limpa, pronto para Docker. Backend em PHP puro com DDD, frontend em HTML/CSS/JS/PHP, separados por nginx, com MySQL e Redis.
+Template full-stack com arquitetura limpa, pronto para Docker. Backend em Go (DDD, `net/http` + GORM), frontend em HTML/CSS/JS/PHP, separados por nginx, com MySQL e Redis.
 
 ---
 
@@ -9,7 +9,7 @@ Template PHP full-stack com arquitetura limpa, pronto para Docker. Backend em PH
 | Camada | Tecnologia |
 |---|---|
 | Proxy reverso | nginx 1.25 |
-| API | PHP 8.2-FPM · PDO MySQL · phpdotenv v5 |
+| API | Go 1.22 · net/http · GORM (MySQL) · JWT |
 | Frontend | HTML5 · CSS3 · JS ES2022 · PHP 8.2-FPM |
 | Banco de dados | MySQL 8.0 |
 | Cache | Redis 7 |
@@ -21,32 +21,33 @@ Template PHP full-stack com arquitetura limpa, pronto para Docker. Backend em PH
 
 ```
 .
-├── back/                   API PHP (DDD)
-│   ├── src/
-│   │   ├── Core/           roteador, PDO, middleware, response
-│   │   ├── Http/           registro de rotas
-│   │   ├── Routes/         main.php — ponto central de rotas
-│   │   └── Domain/
-│   │       └── Usuario/    domínio de usuários (Controller, UseCase, Repository, DTO)
-│   ├── composer.json
-│   ├── index.php
-│   └── .env.exemple
-├── front/                  Frontend
-│   ├── Auth/               páginas de autenticação
-│   ├── test/               páginas de exemplo (pública e protegida)
-│   ├── css/                estilos por feature
-│   ├── js/                 scripts por feature
-│   └── php/class/          sessão e proxy para API
-├── nginx/
-│   └── default.conf        roteamento /api/* → back · /* → front
-├── docker/
-│   ├── back/               Dockerfile PHP-FPM + Composer
-│   └── front/              Dockerfile PHP-FPM
-├── db/
-│   └── create_usuarios.sql tabela + usuário de teste
+├── back/                       API Go
+│   ├── cmd/
+│   │   ├── api/                executável da API
+│   │   └── migration/          executável de migrations/seeders
+│   ├── docker/Dockerfile       build multi-stage (api + migration)
+│   ├── migration/              migrate.go e seeder.go
+│   ├── internal/
+│   │   ├── config/             carregamento do .env
+│   │   ├── domain/user/        errors, handler, model, repository, service, usecase
+│   │   ├── infra/              database, mailer, token (JWT)
+│   │   ├── middleware/         auth, rate_limit
+│   │   ├── providers/          logger, cors (Register + Boot)
+│   │   ├── response/           envelope JSON padrão
+│   │   └── router/             providers → middlewares → rotas
+│   ├── go.mod
+│   └── .env.example
+├── front/                      Frontend
+│   ├── Auth/                   páginas de autenticação
+│   ├── test/                   páginas de exemplo (pública e protegida)
+│   ├── css/  js/               estilos e scripts por feature
+│   ├── php/class/              sessão e proxy para API
+│   └── .env.example
+├── nginx/default.conf          /api/* → back:8080 · /* → front
+├── docker/front/               Dockerfile PHP-FPM do front
 ├── docker-compose.yml
 ├── .env.example
-└── llm/                    documentação para uso com IA
+└── llm/                        documentação para uso com IA
 ```
 
 ---
@@ -56,40 +57,12 @@ Template PHP full-stack com arquitetura limpa, pronto para Docker. Backend em PH
 ### 1. Copiar e preencher os arquivos de ambiente
 
 ```bash
-cp .env.example .env
-cp back/.env.exemple back/.env
+cp .env.example .env               # docker-compose (portas, credenciais do MySQL)
+cp back/.env.example back/.env     # API Go
+cp front/.env.example front/.env   # PHP do front
 ```
 
-**`.env`** (raiz) — usado pelo docker-compose:
-
-```env
-PROJECT_NAME=myapp
-NGINX_PORT=80
-DB_ROOT_PASSWORD=rootpassword
-DB_DATABASE=mydb
-DB_USERNAME=myuser
-DB_PASSWORD=mypassword
-DB_PORT_EXPOSE=3306
-REDIS_PORT_EXPOSE=6379
-```
-
-**`back/.env`** — usado pelo PHP da API:
-
-```env
-PROJECT_NAME=api
-DB_HOST=mysql
-DB_PORT=3306
-DB_DATABASE=mydb
-DB_USERNAME=myuser
-DB_PASSWORD=mypassword
-API_USER=admin
-API_PASSWORD=secret
-PASSWORD_SECRET=t3mpl@t3-s3cr3t-k3y-2024
-REDIS_HOST=redis
-REDIS_PORT=6379
-```
-
-> **Importante:** `PROJECT_NAME=api` no `back/.env` deve permanecer `api` para o roteador remover o prefixo `/api` das URLs corretamente.
+As credenciais de banco em `back/.env` (`DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`) precisam bater com as do `.env` da raiz. Troque `JWT_SECRET` e `PASSWORD_SECRET` por valores longos e aleatórios.
 
 ### 2. Subir os containers
 
@@ -97,7 +70,7 @@ REDIS_PORT=6379
 docker compose up -d --build
 ```
 
-O MySQL executa automaticamente os scripts de `db/` na primeira inicialização, criando a tabela `usuarios` e inserindo o usuário de teste.
+O serviço `migrate` roda as migrations e os seeders (`/app/migration -seed`) e encerra; a API só sobe depois que ele termina com sucesso.
 
 ### 3. Acessar
 
@@ -106,91 +79,86 @@ O MySQL executa automaticamente os scripts de `db/` na primeira inicialização,
 | `http://localhost/` | Página inicial (pública) |
 | `http://localhost/Auth/login.html` | Tela de login |
 | `http://localhost/test/auth-needed.html` | Exemplo de página protegida |
-| `http://localhost/test/non-auth-needed.html` | Exemplo de página pública |
-| `http://localhost/api/` | Endpoint da API |
+| `http://localhost/api/health` | Health check da API |
 
 ---
 
-## Usuário de teste
+## Usuário admin inicial
 
-> **Criado automaticamente ao subir o banco pela primeira vez.**
+Criado pelo seeder a partir de `back/.env`:
 
-| Campo | Valor |
+| Variável | Padrão do `.env.example` |
 |---|---|
-| usuario | `admin` |
-| email | `admin@teste.com` |
-| senha | `senha123` |
+| `SEED_ADMIN_LOGIN` | `admin` |
+| `SEED_ADMIN_PASSWORD` | `senha12345` |
+| `SEED_ADMIN_EMAIL` | `admin@example.com` |
 
-O hash armazenado no banco foi gerado com `password_hash('senha123' . PASSWORD_SECRET, PASSWORD_BCRYPT)`, onde `PASSWORD_SECRET=t3mpl@t3-s3cr3t-k3y-2024`.
+O seeder é idempotente: se o login já existe, nada é alterado. Com `SEED_ADMIN_PASSWORD` vazio, o admin não é criado.
 
-> ⚠️ **Se você trocar o `PASSWORD_SECRET` no `back/.env`**, o hash do usuário de teste deixa de ser válido. Gere um novo hash e atualize `db/create_usuarios.sql`:
->
-> ```bash
-> php -r "echo password_hash('senha123' . 'SEU_NOVO_SECRET', PASSWORD_BCRYPT);"
-> ```
->
-> Depois recrie o volume do banco:
->
-> ```bash
-> docker compose down -v
-> docker compose up -d --build
-> ```
+> ⚠️ Senhas são guardadas como `bcrypt(HMAC-SHA256(PASSWORD_SECRET, senha))`. **Trocar o `PASSWORD_SECRET` invalida todas as senhas existentes.**
 
 ---
 
 ## Rotas da API
 
-Base: `http://localhost/api`
+Base: `http://localhost/api` · Autenticação: `Authorization: Bearer <token>`
 
-| Método | Rota | Descrição | Auth |
+| Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `POST` | `/auth/login` | Autenticar usuário | — |
-| `POST` | `/usuarios` | Criar novo usuário | — |
+| `GET` | `/health` | — | Health check da API e do banco (200 ok · 503 banco fora) |
+| `POST` | `/auth/login` | — | Login com `login` e `password` |
+| `POST` | `/auth/refresh` | token (válido ou expirado há ≤ 30 min) | Renova o token |
+| `GET` | `/auth/me` | token | Usuário autenticado |
+| `GET` | `/users?page=1&perPage=20` | admin | Listar usuários |
+| `POST` | `/users` | admin | Criar usuário |
+| `GET` | `/users/{id}` | admin ou o próprio | Buscar usuário |
+| `PUT` | `/users/{id}` | admin ou o próprio | Atualizar (só admin altera `role`) |
+| `DELETE` | `/users/{id}` | admin | Remover (soft delete) |
 
 ### POST `/api/auth/login`
 
 ```json
 // Request
-{ "email": "admin@teste.com", "senha": "senha123" }
+{ "login": "admin", "password": "senha12345" }
 
 // Response 200
 {
   "status": true,
   "statusCode": 200,
-  "data": { "id": 1, "usuario": "admin", "email": "admin@teste.com", "criacao_datahora": "...", "alteracao_datahora": "..." }
+  "data": {
+    "token": "eyJhbGciOi...",
+    "expiresAt": 1798650000,
+    "user": { "id": 1, "login": "admin", "name": "Administrador", "email": "admin@example.com", "role": "admin", "createdAt": "...", "updatedAt": "..." }
+  }
 }
 
 // Response 401
-{ "status": false, "statusCode": 401, "error": "Credenciais inválidas." }
+{ "status": false, "statusCode": 401, "error": "login ou senha inválidos" }
 ```
 
-### POST `/api/usuarios`
+### POST `/api/users`
 
 ```json
 // Request
-{ "usuario": "joao", "email": "joao@email.com", "senha": "minhasenha" }
+{ "login": "joao", "name": "João", "email": "joao@email.com", "password": "minhasenha", "role": "user" }
 
 // Response 201
-{
-  "status": true,
-  "statusCode": 201,
-  "data": { "id": 2, "usuario": "joao", "email": "joao@email.com", "criacao_datahora": "..." }
-}
+{ "status": true, "statusCode": 201, "data": { "id": 2, "login": "joao", ... } }
 
 // Response 422 — validação
-{ "status": false, "statusCode": 422, "error": "Email inválido." }
+{ "status": false, "statusCode": 422, "error": "Dados inválidos.", "details": { "email": "formato inválido" } }
 
 // Response 409 — conflito
-{ "status": false, "statusCode": 409, "error": "Email já cadastrado." }
+{ "status": false, "statusCode": 409, "error": "login já cadastrado" }
 ```
 
 ---
 
 ## Controle de sessão no frontend
 
-A sessão é gerenciada pelo PHP do container front via `$_SESSION`.
+O login é feito com **login e senha**. O PHP do front (`php/class/Auth/auth.php`) chama a API e guarda `user` e o JWT (`token`) em `$_SESSION`.
 
-**Página pública** — nenhuma configuração necessária.
+Quando o token expira, a próxima requisição do usuário ao PHP do front tenta renová-lo em `POST /api/auth/refresh`. Isso só funciona se o token expirou há no máximo 30 minutos (`JWT_REFRESH_GRACE_MINUTES` / `SESSION_REFRESH_GRACE`). Se a renovação falhar, a sessão é encerrada e o usuário volta ao login.
 
 **Página protegida** — inclua `session-check.js` como primeiro script no `<head>`:
 
@@ -200,33 +168,30 @@ A sessão é gerenciada pelo PHP do container front via `$_SESSION`.
 </head>
 ```
 
-O script oculta a página, verifica a sessão e redireciona para `/Auth/login.html` se não autenticado. Após confirmação, expõe `window.__session` com os dados do usuário.
+Para chamar rotas protegidas da API a partir do PHP do front:
+
+```php
+$curl = new CurlHelper($_SESSION['token']);
+$resp = $curl->get('/auth/me');
+```
 
 ---
 
 ## Adicionando um novo domínio no backend
 
-Crie a estrutura em `back/src/Domain/NomeDominio/`:
+Veja `back/context.md`. Resumo:
 
 ```
-NomeDominio/
-├── Controller/NomeDominioController.php
-├── UseCase/NomeUseCase.php
-├── Repository/
-│   ├── NomeDominioRepositoryInterface.php
-│   └── NomeDominioRepository.php
-└── DTO/NomeDominioDTO.php
+back/internal/domain/<nome>/
+├── errors/      erros de domínio
+├── model/       entidade + DTOs
+├── repository/  interface + GORM
+├── service/     regras de domínio
+├── usecase/     um arquivo por caso de uso
+└── handler/     leitura do request / escrita do response
 ```
 
-Registre as rotas em `back/src/Routes/main.php`:
-
-```php
-Route::get('/recurso',      'Domain\\NomeDominio\\Controller\\NomeDominioController@listar', []);
-Route::post('/recurso',     'Domain\\NomeDominio\\Controller\\NomeDominioController@criar',  []);
-Route::put('/recurso/{id}', 'Domain\\NomeDominio\\Controller\\NomeDominioController@editar', ['auth']);
-```
-
-Consulte `Domain/Teste` como referência de implementação completa e `llm/task/task.example.md` para usar IA no desenvolvimento.
+Depois: adicione o model em `back/migration/migrate.go` e registre as rotas em `back/internal/router/router.go`.
 
 ---
 
@@ -236,18 +201,20 @@ Consulte `Domain/Teste` como referência de implementação completa e `llm/task
 # Subir tudo
 docker compose up -d --build
 
-# Ver logs de um serviço
+# Logs
 docker compose logs -f back
-docker compose logs -f nginx
+docker compose logs migrate
+
+# Rodar migrations/seeders manualmente
+docker compose run --rm migrate                         # migrations + seed
+docker compose run --rm migrate /app/migration          # só migrations
 
 # Recriar banco do zero (apaga todos os dados)
 docker compose down -v && docker compose up -d --build
 
-# Acessar o container do back
-docker compose exec back sh
-
-# Rodar composer manualmente
-docker compose exec back composer install
+# Desenvolvimento local (fora do Docker), dentro de back/
+go run ./cmd/migration -seed
+go run ./cmd/api
 ```
 
 ---
@@ -256,8 +223,8 @@ docker compose exec back composer install
 
 | Arquivo | Conteúdo |
 |---|---|
-| `back/context.md` | Stack, variáveis de ambiente e padrões do backend |
-| `back/archtecture.md` | Diagrama de camadas e ciclo de vida de uma requisição |
+| `back/context.md` | Stack, estrutura, padrões e comandos do backend |
+| `back/archtecture.md` | Camadas, regras de dependência e rotas |
 | `front/context.md` | Separação de responsabilidades e convenções do frontend |
 | `front/archtecture.md` | Fluxo de autenticação e organização de arquivos |
 | `llm/context/context.md` | Visão geral do projeto para uso com IA |

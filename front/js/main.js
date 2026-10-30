@@ -3,15 +3,26 @@ async function logout() {
     window.location.href = '/Auth/login.html';
 }
 
-// Exibe o nome do usuário se estiver autenticado (não redireciona se não estiver)
+// Mostra os elementos conforme a sessão (não redireciona se não estiver logado):
+//   data-auth="user"  → só para usuários logados
+//   data-auth="guest" → só para visitantes
+function applyAuthState(autenticado) {
+    document.querySelectorAll('[data-auth]').forEach((el) => {
+        el.hidden = el.dataset.auth !== (autenticado ? 'user' : 'guest');
+    });
+}
+
 async function loadUserInfo() {
     try {
         const res  = await fetch('/php/class/session_check.php');
         const data = await res.json();
-        const el   = document.getElementById('nome-usuario');
-        if (el) el.textContent = data.autenticado ? data.usuario.usuario : '';
+
+        const el = document.getElementById('nome-usuario');
+        if (el) el.textContent = data.autenticado ? data.usuario.name : '';
+
+        applyAuthState(data.autenticado);
     } catch {
-        // página pública — ignora silenciosamente
+        applyAuthState(false); // falha na checagem → trata como visitante
     }
 }
 

@@ -1,86 +1,98 @@
 # Contexto do Backend
 
 ## Stack
-- PHP 8.2 puro — sem framework (sem Laravel, sem Symfony)
-- MySQL 8.0 via PDO (`DatabaseMysql`)
-- Redis 7 (disponível via serviço `redis` na rede Docker)
-- `vlucas/phpdotenv` v5 para carregar variáveis de ambiente
-- Composer com PSR-4: `App\` → `src/`
+- Go 1.22 — `net/http` da biblioteca padrão (roteamento com padrões `"METHOD /path/{id}"`)
+- MySQL 8.0 via GORM (`gorm.io/gorm` + `gorm.io/driver/mysql`)
+- JWT HS256 (`golang-jwt/jwt/v5`) para autenticação
+- bcrypt + pepper HMAC-SHA256 (`PASSWORD_SECRET`) para senhas
+- `joho/godotenv` para carregar o `.env` (variáveis do ambiente têm prioridade)
+- Módulo: `github.com/djsilvajr/simple-project-template/back`
 
-## Variáveis de ambiente (`back/.env`)
-| Variável | Uso |
-|---|---|
-| `PROJECT_NAME` | Prefixo de URL removido pelo roteador — deve ser `api` |
-| `DB_HOST` | Host MySQL — use `mysql` (nome do serviço Docker) |
-| `DB_PORT` | Porta MySQL (padrão `3306`) |
-| `DB_DATABASE` | Nome do banco |
-| `DB_USERNAME` | Usuário MySQL |
-| `DB_PASSWORD` | Senha MySQL |
-| `API_USER` | Usuário para HTTP Basic Auth (middleware `auth`) |
-| `API_PASSWORD` | Senha para HTTP Basic Auth |
-| `PASSWORD_SECRET` | Pepper concatenado à senha antes do hash/verify |
-| `REDIS_HOST` | Host Redis — use `redis` (nome do serviço Docker) |
-| `REDIS_PORT` | Porta Redis (padrão `6379`) |
+## Estrutura
+```
+back/
+├── cmd/
+│   ├── api/main.go            executável da API (HTTP + graceful shutdown)
+│   └── migration/main.go      executável de migrations/seeders
+├── docker/Dockerfile          build multi-stage → imagem com /app/api e /app/migration
+├── migration/
+│   ├── migrate.go             AutoMigrate dos models (lista `models`)
+│   └── seeder.go              seeders idempotentes (lista `seeders`)
+└── internal/
+    ├── config/config.go       Load() + getEnvStr / getEnvBool / getEnvInt
+    ├── domain/
+    │   └── user/
+    │       ├── errors/        erros de domínio (sentinelas + ValidationError)
+    │       ├── handler/       "controller": lê request, chama use case, escreve response
+    │       ├── model/         entidade User + DTOs de entrada/saída
+    │       ├── repository/    interface + implementação GORM
+    │       ├── service/       regras de domínio reutilizáveis (validação, unicidade, hash)
+    │       └── usecase/       fluxos da aplicação + autorização (um arquivo por caso de uso)
+    ├── infra/
+    │   ├── database/          conexão GORM + pool + retry
+    │   ├── mailer/            SMTP (ou log quando MAIL_ENABLED=false)
+    │   └── token/             geração/validação de JWT
+    ├── middleware/            executam por rota, antes do handler (auth, rate_limit)
+    ├── providers/             executam em TODA requisição, no início e no fim (logger, cors)
+    ├── response/              envelope JSON padrão (Success / Error)
+    └── router/router.go       monta providers → middlewares → rotas
+```
 
 ## Fluxo de uma requisição
 ```
-nginx /api/recurso → PHP-FPM back:9000
-  → index.php            carrega .env, registra rotas
-    → Routes/main.php    define Route::post/get/put/delete
-      → Core.php         match de URL, executa middleware, chama controller
-        → Controller     lê body, chama UseCase, retorna array via Response::*
-          → UseCase      regras de negócio, valida dados, chama Repository
-            → Repository → DatabaseMysql → MySQL
+nginx /api/users → proxy_pass http://back:8080/users   (prefixo /api removido)
+  → providers (Boot)        Logger (início) → CORS
+    → middlewares da rota   RateLimit → Auth → RequireRole
+      → handler             decodifica JSON, monta Actor, chama use case
+        → usecase           autorização (admin / próprio usuário) + orquestração
+          → service         validação, unicidade, hash de senha
+            → repository    GORM → MySQL
+  ← providers (fim)         Logger imprime status e duração
 ```
 
-> `PROJECT_NAME=api` faz `Core::stripProjectPrefix` remover `/api` antes do match.
-> Registre rotas **sem** o prefixo `/api`: `Route::post('/usuarios', ...)`.
+## Providers vs. middlewares
+| | Providers (`internal/providers`) | Middlewares (`internal/middleware`) |
+|---|---|---|
+| Quando | Toda requisição, inclusive 404 e preflight | Apenas nas rotas onde são declarados |
+| Ordem | Antes de qualquer middleware/rota e depois de tudo | Entre o provider e o handler |
+| Interface | `Register(cfg)` (1x no startup) + `Boot(next)` (por requisição) | `func(http.Handler) http.Handler` |
+| Registro | `providers.Default()` | `route(pattern, handler, mws...)` em `router.go` |
 
-## Padrão de resposta
-```php
-use App\Core\Response;
-
-return Response::success($dados);         // HTTP 200
-return Response::success($dados, 201);    // HTTP 201 Created
-return Response::error('Mensagem', 422);  // HTTP 4xx / 5xx
+## Padrão de resposta (`internal/response`)
+```go
+response.Success(w, http.StatusOK, data)                     // { status: true, statusCode, data }
+response.Error(w, http.StatusNotFound, "mensagem")           // { status: false, statusCode, error }
+response.ErrorWithDetails(w, 422, "Dados inválidos.", campos) // + details
+response.NoContent(w)                                         // 204
 ```
-`Response` já define `http_response_code` e retorna o array que `Core.php` serializa como JSON.
+Listagens usam `response.Paginated{Items, Total, Page, PerPage}` dentro de `data`.
+
+## Erros → HTTP (feito em `handler.writeError`)
+| Erro de domínio | HTTP |
+|---|---|
+| `*ValidationError` | 422 (com `details` por campo) |
+| `ErrInvalidCredentials`, `ErrSessionExpired` | 401 |
+| `ErrForbidden`, `ErrCannotDeleteSelf` | 403 |
+| `ErrNotFound` | 404 |
+| `ErrLoginTaken`, `ErrEmailTaken` | 409 |
+| qualquer outro | 500 (logado, mensagem genérica) |
+
+## Variáveis de ambiente
+Veja `back/.env.example` — todas comentadas. Obrigatórias: `DB_DATABASE`, `DB_USERNAME`, `JWT_SECRET`, `PASSWORD_SECRET` (e `MAIL_HOST` se `MAIL_ENABLED=true`).
 
 ## Como adicionar um novo domínio
-1. Crie `src/Domain/NomeDominio/` com subpastas `Controller/`, `UseCase/`, `Repository/`, `DTO/`
-2. Implemente `RepositoryInterface` e `Repository` (injeta `DatabaseMysql`)
-3. Crie `UseCase` com regras de negócio
-4. Crie `Controller` — lê `json_decode(file_get_contents('php://input'), true)`, chama use case, retorna `Response::*`
-5. Registre as rotas em `src/Routes/main.php`
+1. Crie `internal/domain/<nome>/` com `errors/`, `model/`, `repository/`, `service/`, `usecase/`, `handler/`
+2. Adicione o model em `migration/migrate.go` (`models`)
+3. Instancie repository → service → use cases → handler em `router.Setup`
+4. Registre as rotas em `router.Setup` com os middlewares necessários
 
-Referência: `Domain/Teste` é o exemplo completo funcional.
+Referência: `internal/domain/user`.
 
-## DatabaseMysql — métodos disponíveis
-```php
-$db->selectAll($sql, $params);      // array de linhas
-$db->selectOne($sql, $params);      // array|null (uma linha)
-$db->insert($sql, $params);         // int (lastInsertId)
-$db->insertNoKeyTable($sql, $params); // int (rowCount)
-$db->update($sql, $params);         // int (rowCount)
-$db->delete($sql, $params);         // int (rowCount)
+## Comandos
+```bash
+go run ./cmd/api                      # sobe a API (lê back/.env)
+go run ./cmd/migration                # aplica migrations
+go run ./cmd/migration -seed          # migrations + seeders
+go run ./cmd/migration -seed-only     # apenas seeders
+go vet ./... && go build ./...
 ```
-Parâmetros sempre como array associativo com placeholders nomeados (`:coluna`).
-
-## Hashing de senha com pepper
-```php
-$pepper = $_ENV['PASSWORD_SECRET'] ?? '';
-$hash   = password_hash($senha . $pepper, PASSWORD_BCRYPT);  // criar
-$ok     = password_verify($senha . $pepper, $hashDoBanco);   // verificar
-```
-
-## Middleware
-- Implementar `App\Core\Middleware\MiddlewareInterface::handle(): ?array`
-- `null` = continua para o controller; `array` = bloqueia com aquele array como resposta JSON
-- Registrar alias em `MiddlewareRegistry::$map`
-- Usar nas rotas: `Route::get('/rota', 'Controller@metodo', ['alias'])`
-
-## Convenções
-- Body JSON: `json_decode(file_get_contents('php://input'), true) ?? []`
-- `$params` no controller = segmentos dinâmicos da URL (`{id}` etc.)
-- `Content-Type: application/json` já é definido por `Core.php` antes de chamar o controller
-- Exceções de validação → HTTP 422; conflito/negócio → HTTP 409; auth → HTTP 401

@@ -2,7 +2,10 @@
 
 declare(strict_types=1);
 
-session_start();
+require_once __DIR__ . '/helper/Session.php';
+
+// Session::start() já descarta a sessão se o token da API tiver expirado
+Session::start();
 
 header('Content-Type: application/json; charset=utf-8');
 

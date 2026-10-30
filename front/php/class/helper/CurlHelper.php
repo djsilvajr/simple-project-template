@@ -5,10 +5,17 @@ declare(strict_types=1);
 class CurlHelper
 {
     private string $baseUrl;
+    private int $timeout;
+    private ?string $token;
 
-    public function __construct()
+    /**
+     * @param string|null $token JWT da API (ex.: $_SESSION['token']) para rotas protegidas
+     */
+    public function __construct(?string $token = null)
     {
         $this->baseUrl = rtrim(getenv('API_BASE_URL') ?: 'http://nginx/api', '/');
+        $this->timeout = (int) (getenv('API_TIMEOUT') ?: 10);
+        $this->token   = $token;
     }
 
     public function post(string $endpoint, array $data): array
@@ -30,13 +37,18 @@ class CurlHelper
         $url = str_starts_with($endpoint, 'http') ? $endpoint : $this->baseUrl . $endpoint;
         $ch  = curl_init($url);
 
+        $headers = [
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ];
+        if ($this->token !== null && $this->token !== '') {
+            $headers[] = 'Authorization: Bearer ' . $this->token;
+        }
+
         $options = [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 10,
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-            ],
+            CURLOPT_TIMEOUT        => $this->timeout,
+            CURLOPT_HTTPHEADER     => $headers,
         ];
 
         if ($method === 'POST') {

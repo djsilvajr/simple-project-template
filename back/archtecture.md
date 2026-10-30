@@ -1,116 +1,78 @@
 # Arquitetura do Backend
 
-## Visão geral das camadas
+## Camadas
 
 ```
-┌─────────────────────────────────────────────────┐
-│  nginx                                          │
-│  Recebe /api/* e encaminha para PHP-FPM :9000   │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  index.php  (bootstrap)                         │
-│  1. Carrega back/.env via phpdotenv             │
-│  2. Inclui Routes/main.php (registra rotas)     │
-│  3. Instancia Core e chama dispatch()           │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  Core/Core.php  (dispatcher)                    │
-│  1. Lê REQUEST_METHOD + REQUEST_URI             │
-│  2. Remove prefixo PROJECT_NAME do path         │
-│  3. Itera rotas: compara método + path regex    │
-│  4. Executa pipeline de middleware              │
-│  5. Instancia controller e chama action($params)│
-│  6. Serializa retorno como JSON                 │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  Domain / Controller                            │
-│  - Lê body JSON do request                     │
-│  - Instancia UseCase + Repository               │
-│  - Retorna Response::success() ou error()       │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  Domain / UseCase                               │
-│  - Validações de negócio                        │
-│  - Orquestra chamadas ao Repository             │
-│  - Lança exceções tipadas (\InvalidArgumentException, \RuntimeException)
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  Domain / Repository                            │
-│  - Implementa RepositoryInterface               │
-│  - Único ponto de acesso ao banco               │
-│  - Injeta DatabaseMysql                         │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  Core/Database/DatabaseMysql                    │
-│  - PDO com prepared statements nativos          │
-│  - UTF-8mb4, ERRMODE_EXCEPTION                  │
-│  - Métodos: selectAll, selectOne, insert,       │
-│    insertNoKeyTable, update, delete             │
-└─────────────────┬───────────────────────────────┘
-                  │
-              MySQL 8.0
+┌──────────────────────────────────────────────────────┐
+│  nginx                                               │
+│  /api/* → proxy_pass http://back:8080/ (sem /api)    │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  cmd/api/main.go                                     │
+│  config.Load → database.Connect → router.Setup       │
+│  http.Server com graceful shutdown (SIGTERM)         │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  providers (Boot) — toda requisição                  │
+│  Logger: imprime método/url/path/ip (+ body opc.)    │
+│  CORS:   headers + responde preflight OPTIONS        │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  middlewares — por rota                              │
+│  RateLimit (token bucket por IP)                     │
+│  Auth (Bearer JWT → claims no context)               │
+│  RequireRole("admin")                                │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  domain/<x>/handler   — papel de controller          │
+│  decodifica JSON, monta Actor, mapeia erro → HTTP    │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  domain/<x>/usecase   — fluxo da aplicação           │
+│  autorização + orquestração (service, mailer, token) │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  domain/<x>/service   — regras de domínio            │
+│  validação, unicidade, hash de senha                 │
+│  (reutilizado pelos use cases e pelo seeder)         │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│  domain/<x>/repository — interface + GORM            │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                   MySQL 8.0
 ```
 
-## Estrutura de pastas
+Na volta, o Logger (provider mais externo) imprime status e tempo de execução.
 
-```
-back/
-├── index.php                  bootstrap
-├── composer.json              PSR-4: App\ → src/
-├── src/
-│   ├── Core/
-│   │   ├── Core.php           dispatcher de rotas
-│   │   ├── Response.php       helper de resposta JSON padronizada
-│   │   ├── Database/
-│   │   │   └── DatabaseMysql.php   abstração PDO
-│   │   └── Middleware/
-│   │       ├── MiddlewareInterface.php
-│   │       ├── MiddlewareRegistry.php   mapa alias → classe
-│   │       ├── AuthMiddleware.php       HTTP Basic Auth
-│   │       └── Response.php
-│   ├── Http/
-│   │   └── Route.php          API fluente de registro de rotas
-│   ├── Routes/
-│   │   └── main.php           ponto central de definição de rotas
-│   └── Domain/
-│       └── <NomeDominio>/     um diretório por bounded context
-│           ├── Controller/
-│           ├── UseCase/
-│           ├── Repository/
-│           └── DTO/
-```
+## Regras de dependência
+- `handler` → `usecase` → `service` → `repository` → `model`
+- `errors` e `model` não importam nada do domínio
+- `infra/*`, `response`, `config` não importam domínios
+- `router` é o único lugar que conhece todas as peças (composição)
 
-## Padrão de rota → controller
+## Rotas atuais
 
-```
-Route::post('/usuarios', 'Domain\\Teste\\Controller\\UsuarioController@criar', []);
-                                                                               ↑
-                                                            array de aliases de middleware
-```
+| Método | Rota | Middlewares | Regra |
+|---|---|---|---|
+| GET | `/health` | — | pinga o MySQL (timeout 2s): 200 ou 503 com `details.database = "down"` |
+| POST | `/auth/login` | rate_limit | |
+| POST | `/auth/refresh` | rate_limit | Bearer com token válido ou expirado há ≤ `JWT_REFRESH_GRACE_MINUTES`; recarrega o usuário do banco |
+| GET | `/auth/me` | rate_limit, auth | |
+| GET | `/users?page=&perPage=` | rate_limit, auth, admin | |
+| POST | `/users` | rate_limit, auth, admin | envia e-mail de boas-vindas |
+| GET | `/users/{id}` | rate_limit, auth | admin ou o próprio usuário |
+| PUT | `/users/{id}` | rate_limit, auth | admin ou o próprio; só admin muda `role` |
+| DELETE | `/users/{id}` | rate_limit, auth, admin | soft delete; não remove a si mesmo |
 
-O `Core.php` resolve `App\Domain\Teste\Controller\UsuarioController` via PSR-4 e chama `criar($params)`.
-
-## Middleware pipeline
-
-```
-foreach ($route['middleware'] as $alias) {
-    $resultado = MiddlewareRegistry::resolve($alias)->handle();
-    if ($resultado !== null) { echo json_encode($resultado); return; }
-}
-// só chega aqui se todos os middlewares retornaram null
-controller->action($params);
-```
-
-## Ciclo de vida de um erro
-
-| Tipo de exceção | HTTP sugerido | Lançado em |
-|---|---|---|
-| `\InvalidArgumentException` | 422 | UseCase — validação de entrada |
-| `\RuntimeException` | 409 / 401 | UseCase — regra de negócio / auth |
-| `\Throwable` | 500 | Controller — catch-all |
+## Migrations e seeders
+`cmd/migration` usa `migration.Migrate` (GORM AutoMigrate dos `models`) e `migration.Seed`.
+No docker-compose o serviço `migrate` roda `/app/migration -seed` e o `back` só sobe depois
+que ele termina com sucesso.

@@ -9,10 +9,13 @@
 <body>
 
     <header class="header">
-        <span>Olá, <strong id="nome-usuario"></strong></span>
+        <!-- data-auth="user": só para logados · data-auth="guest": só para visitantes.
+             Começam ocultos (hidden) e o main.js mostra os certos após checar a sessão. -->
+        <span data-auth="user" hidden>Olá, <strong id="nome-usuario"></strong></span>
+        <span data-auth="guest" hidden>Bem-vindo(a)</span>
         <nav class="header-nav">
-            <a href="/Auth/login.html">Entrar</a>
-            <button onclick="logout()" class="btn-logout">Sair</button>
+            <a href="/Auth/login.html" data-auth="guest" hidden>Entrar</a>
+            <button onclick="logout()" class="btn-logout" data-auth="user" hidden>Sair</button>
         </nav>
     </header>
 

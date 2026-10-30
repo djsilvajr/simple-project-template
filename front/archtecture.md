@@ -34,14 +34,15 @@ Browser
 ```
 login.html
   └── auth.js
-        └── fetch POST /php/class/Auth/auth.php  (JSON: {email, senha})
+        └── fetch POST /php/class/Auth/auth.php  (JSON: {login, password})
               └── auth.php
-                    └── CurlHelper.post('/auth/login', {email, senha})
+                    └── CurlHelper.post('/auth/login', {login, password})
                           └── curl POST http://nginx/api/auth/login
-                                └── nginx → back PHP-FPM
-                                      └── AuthController → UseCase → Repository → MySQL
-                                            ← {status:true, data:{id,usuario,email,...}}
-                    └── $_SESSION['user'] = $response['body']['data']
+                                └── nginx → back (Go :8080)
+                                      └── handler → usecase.Login → service → repository → MySQL
+                                            ← {status:true, data:{token, expiresAt, user:{id,login,name,email,role,...}}}
+                    └── $_SESSION['user']  = data.user
+                    └── $_SESSION['token'] = data.token  (JWT para rotas protegidas)
                     ← {status: true}
               ← {status: true}
         └── window.location = '/'

@@ -1,16 +1,15 @@
 # Contexto Geral do Projeto
 
 ## O que é
-Template de projeto PHP full-stack com arquitetura limpa, separação total de responsabilidades entre frontend e backend, pronto para Docker. Serve como ponto de partida para aplicações web com API PHP pura e frontend sem framework.
+Template de projeto full-stack com arquitetura limpa, separação total de responsabilidades entre frontend e backend, pronto para Docker. Serve como ponto de partida para aplicações web com API em Go (DDD) e frontend sem framework.
 
 ## Repositório
 ```
 simple-project-template/
-├── back/      API PHP (DDD, sem framework)
+├── back/      API Go (DDD, net/http + GORM)
 ├── front/     Frontend (HTML, CSS, JS, PHP de sessão)
 ├── nginx/     Configuração do proxy reverso
-├── docker/    Dockerfiles de back e front
-├── db/        Scripts SQL de inicialização
+├── docker/    Dockerfile do front (o do back fica em back/docker/)
 ├── redis/     (volume Redis — não versionar dados)
 └── llm/       Documentação para uso com IA
 ```
@@ -19,7 +18,7 @@ simple-project-template/
 | Camada | Tecnologia |
 |---|---|
 | Proxy reverso | nginx 1.25 |
-| API | PHP 8.2-FPM, PDO MySQL, phpdotenv v5 |
+| API | Go 1.22, net/http, GORM (MySQL), JWT |
 | Frontend | HTML5, CSS3, JS ES2022, PHP 8.2-FPM (sessão + cURL) |
 | Banco de dados | MySQL 8.0 |
 | Cache / filas | Redis 7 |
@@ -29,7 +28,8 @@ simple-project-template/
 | Serviço | Imagem | Porta interna | Porta exposta |
 |---|---|---|---|
 | nginx | nginx:1.25-alpine | 80 | `${NGINX_PORT:-80}` |
-| back | php:8.2-fpm-alpine | 9000 | — |
+| migrate | build de back/docker/Dockerfile | — | — (roda e encerra) |
+| back | build de back/docker/Dockerfile | 8080 | — |
 | front | php:8.2-fpm-alpine | 9000 | — |
 | mysql | mysql:8.0 | 3306 | `${DB_PORT_EXPOSE:-3306}` |
 | redis | redis:7-alpine | 6379 | `${REDIS_PORT_EXPOSE:-6379}` |
@@ -40,13 +40,14 @@ Todos na rede interna `app_network`. Comunicação por nome de serviço (ex: `my
 | Arquivo | Quem usa |
 |---|---|
 | `.env` (raiz) | docker-compose — nomes de container, credenciais MySQL, portas expostas |
-| `back/.env` | PHP backend — DB_HOST, PROJECT_NAME, PASSWORD_SECRET, etc. |
+| `back/.env` | API Go (e serviço migrate) — banco, JWT, rate limit, CORS, mail, seed |
+| `front/.env` | PHP do front — `API_BASE_URL`, `API_TIMEOUT` |
 
-O frontend não tem `.env` próprio. `API_BASE_URL=http://nginx/api` é injetado via `environment:` no docker-compose do serviço `front`.
+`back/.env` e `front/.env` são carregados nos containers via `env_file:` no docker-compose.
 
 ## Roteamento nginx
 ```
-/api/*   → back container (PHP-FPM :9000) — roda index.php para toda requisição
+/api/*   → back container (Go :8080) — proxy_pass remove o prefixo /api
 /*       → nginx serve estático de /var/www/front
 /*.php   → front container (PHP-FPM :9000)
 ```
@@ -59,18 +60,20 @@ front container → HTTP http://nginx/api/recurso → nginx → back container
 Isso preserva o roteamento centralizado e evita acoplamento direto entre os containers de PHP.
 
 ## Padrão de autenticação
-- A API valida credenciais e retorna dados do usuário (sem JWT)
-- O PHP do frontend cria e mantém a sessão (`$_SESSION`)
+- Login com **login e senha**: a API valida e retorna `{ token (JWT), expiresAt, user }`
+- O PHP do frontend guarda `user` e `token` na sessão (`$_SESSION`)
+- Rotas protegidas da API exigem `Authorization: Bearer <token>`
 - O JS verifica a sessão chamando `session_check.php`
 - Páginas protegidas incluem `js/Auth/session-check.js` como primeiro script
 
 ## Como subir o projeto
 ```bash
 cp .env.example .env
-cp back/.env.exemple back/.env
+cp back/.env.example back/.env
+cp front/.env.example front/.env
 # edite os .env com suas credenciais
 docker compose up -d --build
 ```
 
 ## Banco de dados
-Scripts SQL em `db/` são executados automaticamente pelo MySQL na primeira inicialização do container (montado em `/docker-entrypoint-initdb.d`).
+O schema é criado pelo executável `back/cmd/migration` (GORM AutoMigrate dos models listados em `back/migration/migrate.go`). O serviço `migrate` do docker-compose roda `migration -seed` antes da API subir, criando o usuário admin definido por `SEED_ADMIN_*` em `back/.env`.

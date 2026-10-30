@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   nginx:
@@ -17,17 +15,36 @@ services:
       - app_network
     restart: unless-stopped
 
+  # Executa migrations + seeders e encerra. A API só sobe depois que ele termina com sucesso.
+  migrate:
+    build:
+      context: ./back
+      dockerfile: docker/Dockerfile
+    container_name: ${PROJECT_NAME:-app}_migrate
+    command: ["/app/migration", "-seed"]
+    env_file:
+      - ./back/.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_network
+    restart: "no"
+
   back:
     build:
-      context: ./docker/back
+      context: ./back
+      dockerfile: docker/Dockerfile
     container_name: ${PROJECT_NAME:-app}_back
-    volumes:
-      - ./back:/var/www/back
+    env_file:
+      - ./back/.env
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks:
       - app_network
     restart: unless-stopped
@@ -38,8 +55,8 @@ services:
     container_name: ${PROJECT_NAME:-app}_front
     volumes:
       - ./front:/var/www/front
-    environment:
-      API_BASE_URL: http://nginx/api
+    env_file:
+      - ./front/.env
     networks:
       - app_network
     restart: unless-stopped
@@ -53,7 +70,6 @@ services:
       MYSQL_USER: ${DB_USERNAME}
       MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - ./db:/docker-entrypoint-initdb.d:ro
       - mysql_data:/var/lib/mysql
     ports:
       - "${DB_PORT_EXPOSE:-3306}:3306"

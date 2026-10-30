@@ -4,6 +4,11 @@
     padding: 0;
 }
 
+/* Garante que [hidden] vença regras de display (ex.: .header-nav { display: flex }) */
+[hidden] {
+    display: none !important;
+}
+
 body {
     font-family: system-ui, -apple-system, sans-serif;
     background: #f3f4f6;
