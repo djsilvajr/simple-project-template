@@ -33,14 +33,15 @@
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
-│  domain/<x>/usecase   — fluxo da aplicação           │
-│  autorização + orquestração (service, mailer, token) │
+│  domain/<x>/service   — orquestração                 │
+│  define a ordem dos passos de cada operação          │
+│  (chamado pelo handler e pelo seeder)                │
 └──────────────────────┬───────────────────────────────┘
-                       │
+                       │ 1..N
 ┌──────────────────────▼───────────────────────────────┐
-│  domain/<x>/service   — regras de domínio            │
-│  validação, unicidade, hash de senha                 │
-│  (reutilizado pelos use cases e pelo seeder)         │
+│  domain/<x>/usecase   — um passo por arquivo         │
+│  função de responsabilidade única: autorizar,        │
+│  validar, gravar, gerar token, enviar e-mail...      │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
@@ -53,7 +54,8 @@
 Na volta, o Logger (provider mais externo) imprime status e tempo de execução.
 
 ## Regras de dependência
-- `handler` → `usecase` → `service` → `repository` → `model`
+- `handler` → `service` → `usecase` → `repository` → `model`
+- `handler` nunca chama `usecase` diretamente; `usecase` nunca chama `service` nem outro `usecase` (quem combina os passos é o `service`)
 - `errors` e `model` não importam nada do domínio
 - `infra/*`, `response`, `config` não importam domínios
 - `router` é o único lugar que conhece todas as peças (composição)

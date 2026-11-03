@@ -13,7 +13,6 @@ import (
 	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/model"
 	userrepository "github.com/djsilvajr/simple-project-template/back/internal/domain/user/repository"
 	userservice "github.com/djsilvajr/simple-project-template/back/internal/domain/user/service"
-	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/usecase"
 	"github.com/djsilvajr/simple-project-template/back/internal/infra/mailer"
 	"github.com/djsilvajr/simple-project-template/back/internal/infra/token"
 	"github.com/djsilvajr/simple-project-template/back/internal/middleware"
@@ -29,7 +28,7 @@ type Dependencies struct {
 
 // Setup monta a aplicação HTTP. Fluxo de cada requisição:
 //
-//	providers (Boot) -> middlewares da rota -> handler -> middlewares -> providers (fim)
+//	providers (Boot) -> middlewares da rota -> handler -> service -> [use cases] -> providers (fim)
 func Setup(deps Dependencies) (http.Handler, error) {
 	cfg := deps.Config
 
@@ -42,16 +41,13 @@ func Setup(deps Dependencies) (http.Handler, error) {
 	// 2. Dependências dos domínios.
 	tokens := token.NewManager(cfg.Auth.JWTSecret, cfg.Auth.JWTExpiration, cfg.App.Name)
 
-	userSvc := userservice.New(userrepository.New(deps.DB), cfg.Auth.PasswordSecret)
-	users := userhandler.New(userhandler.UseCases{
-		Login:   usecase.NewLogin(userSvc, tokens),
-		Refresh: usecase.NewRefreshToken(userSvc, tokens, cfg.Auth.JWTRefreshGrace),
-		Create:  usecase.NewCreateUser(userSvc, deps.Mailer),
-		Get:     usecase.NewGetUser(userSvc),
-		List:    usecase.NewListUsers(userSvc),
-		Update:  usecase.NewUpdateUser(userSvc),
-		Delete:  usecase.NewDeleteUser(userSvc),
-	})
+	users := userhandler.New(userservice.New(userservice.Deps{
+		Repo:           userrepository.New(deps.DB),
+		PasswordSecret: cfg.Auth.PasswordSecret,
+		Tokens:         tokens,
+		RefreshGrace:   cfg.Auth.JWTRefreshGrace,
+		Mailer:         deps.Mailer,
+	}))
 
 	// 3. Middlewares.
 	rateLimit := middleware.RateLimit(cfg)

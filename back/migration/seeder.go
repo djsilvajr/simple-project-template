@@ -55,8 +55,8 @@ func seedAdminUser(ctx context.Context, db *gorm.DB, cfg *config.Config) error {
 		return err
 	}
 
-	svc := service.New(repo, cfg.Auth.PasswordSecret)
-	user, err := svc.Create(ctx, model.CreateUserInput{
+	svc := service.New(service.Deps{Repo: repo, PasswordSecret: cfg.Auth.PasswordSecret})
+	user, err := svc.Provision(ctx, model.CreateUserInput{
 		Login:    cfg.Seed.AdminLogin,
 		Name:     cfg.Seed.AdminName,
 		Email:    cfg.Seed.AdminEmail,

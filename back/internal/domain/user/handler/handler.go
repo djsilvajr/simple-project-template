@@ -9,45 +9,21 @@ import (
 
 	usererrors "github.com/djsilvajr/simple-project-template/back/internal/domain/user/errors"
 	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/model"
-	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/usecase"
+	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/service"
 	"github.com/djsilvajr/simple-project-template/back/internal/middleware"
 	"github.com/djsilvajr/simple-project-template/back/internal/response"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MB
 
-// Handler faz o papel de controller: lê a requisição, chama o use case e
+// Handler faz o papel de controller: lê a requisição, chama o service e
 // escreve a resposta. Não contém regra de negócio.
 type Handler struct {
-	login   *usecase.Login
-	refresh *usecase.RefreshToken
-	create  *usecase.CreateUser
-	get     *usecase.GetUser
-	list    *usecase.ListUsers
-	update  *usecase.UpdateUser
-	delete  *usecase.DeleteUser
+	service service.Service
 }
 
-type UseCases struct {
-	Login   *usecase.Login
-	Refresh *usecase.RefreshToken
-	Create  *usecase.CreateUser
-	Get     *usecase.GetUser
-	List    *usecase.ListUsers
-	Update  *usecase.UpdateUser
-	Delete  *usecase.DeleteUser
-}
-
-func New(uc UseCases) *Handler {
-	return &Handler{
-		login:   uc.Login,
-		refresh: uc.Refresh,
-		create:  uc.Create,
-		get:     uc.Get,
-		list:    uc.List,
-		update:  uc.Update,
-		delete:  uc.Delete,
-	}
+func New(svc service.Service) *Handler {
+	return &Handler{service: svc}
 }
 
 // Login — POST /auth/login
@@ -57,7 +33,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := h.login.Execute(r.Context(), input)
+	out, err := h.service.Login(r.Context(), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -74,7 +50,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := h.refresh.Execute(r.Context(), raw)
+	out, err := h.service.Refresh(r.Context(), raw)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -90,7 +66,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.get.Execute(r.Context(), actor, actor.ID)
+	user, err := h.service.Get(r.Context(), actor, actor.ID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -109,7 +85,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("perPage"))
 
-	result, err := h.list.Execute(r.Context(), actor, model.ListUsersInput{Page: page, PerPage: perPage})
+	result, err := h.service.List(r.Context(), actor, model.ListUsersInput{Page: page, PerPage: perPage})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -129,7 +105,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.get.Execute(r.Context(), actor, id)
+	user, err := h.service.Get(r.Context(), actor, id)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -150,7 +126,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.create.Execute(r.Context(), actor, input)
+	user, err := h.service.Create(r.Context(), actor, input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -175,7 +151,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.update.Execute(r.Context(), actor, id, input)
+	user, err := h.service.Update(r.Context(), actor, id, input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -195,7 +171,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.delete.Execute(r.Context(), actor, id); err != nil {
+	if err := h.service.Delete(r.Context(), actor, id); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -216,13 +192,13 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-func actorFrom(w http.ResponseWriter, r *http.Request) (usecase.Actor, bool) {
+func actorFrom(w http.ResponseWriter, r *http.Request) (model.Actor, bool) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, "Não autenticado.")
-		return usecase.Actor{}, false
+		return model.Actor{}, false
 	}
-	return usecase.Actor{ID: claims.UserID, Role: model.Role(claims.Role)}, true
+	return model.Actor{ID: claims.UserID, Role: model.Role(claims.Role)}, true
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (uint, bool) {

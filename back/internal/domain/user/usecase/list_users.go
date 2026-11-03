@@ -3,34 +3,11 @@ package usecase
 import (
 	"context"
 
-	usererrors "github.com/djsilvajr/simple-project-template/back/internal/domain/user/errors"
 	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/model"
-	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/service"
-	"github.com/djsilvajr/simple-project-template/back/internal/response"
+	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/repository"
 )
 
-type ListUsers struct {
-	service service.Service
-}
-
-func NewListUsers(svc service.Service) *ListUsers {
-	return &ListUsers{service: svc}
-}
-
-func (uc *ListUsers) Execute(ctx context.Context, actor Actor, input model.ListUsersInput) (*response.Paginated, error) {
-	if !actor.IsAdmin() {
-		return nil, usererrors.ErrForbidden
-	}
-
-	users, total, page, err := uc.service.List(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-
-	return &response.Paginated{
-		Items:   users,
-		Total:   total,
-		Page:    page.Page,
-		PerPage: page.PerPage,
-	}, nil
+// ListUsers busca a página de usuários e o total de registros.
+func ListUsers(ctx context.Context, repo repository.Repository, input model.ListUsersInput) ([]model.User, int64, error) {
+	return repo.List(ctx, (input.Page-1)*input.PerPage, input.PerPage)
 }

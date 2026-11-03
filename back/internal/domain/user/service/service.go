@@ -2,78 +2,120 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"errors"
-	"net/mail"
-	"regexp"
-	"strings"
-	"unicode/utf8"
+	"time"
 
-	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
-
-	usererrors "github.com/djsilvajr/simple-project-template/back/internal/domain/user/errors"
 	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/model"
 	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/repository"
+	"github.com/djsilvajr/simple-project-template/back/internal/domain/user/usecase"
+	"github.com/djsilvajr/simple-project-template/back/internal/infra/mailer"
+	"github.com/djsilvajr/simple-project-template/back/internal/infra/token"
+	"github.com/djsilvajr/simple-project-template/back/internal/response"
 )
 
-const (
-	minPasswordLength = 8
-	maxPasswordLength = 128
-	defaultPerPage    = 20
-	maxPerPage        = 100
-)
-
-var loginPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{3,100}$`)
-
-// Service concentra as regras de domínio do usuário (validação, unicidade,
-// hash de senha). É reutilizado pelos use cases e pelo seeder.
+// Service orquestra as operações do domínio: cada método define o fluxo de uma
+// operação e delega cada passo a um use case. É a única camada chamada pelo
+// handler e não contém regra de negócio própria.
 type Service interface {
-	Create(ctx context.Context, input model.CreateUserInput) (*model.User, error)
-	Update(ctx context.Context, id uint, input model.UpdateUserInput) (*model.User, error)
-	Delete(ctx context.Context, id uint) error
-	GetByID(ctx context.Context, id uint) (*model.User, error)
-	List(ctx context.Context, input model.ListUsersInput) ([]model.User, int64, model.ListUsersInput, error)
-	Authenticate(ctx context.Context, login, password string) (*model.User, error)
+	Login(ctx context.Context, input model.LoginInput) (*model.LoginOutput, error)
+	Refresh(ctx context.Context, rawToken string) (*model.LoginOutput, error)
+	Create(ctx context.Context, actor model.Actor, input model.CreateUserInput) (*model.User, error)
+	Provision(ctx context.Context, input model.CreateUserInput) (*model.User, error)
+	Get(ctx context.Context, actor model.Actor, id uint) (*model.User, error)
+	List(ctx context.Context, actor model.Actor, input model.ListUsersInput) (*response.Paginated, error)
+	Update(ctx context.Context, actor model.Actor, id uint, input model.UpdateUserInput) (*model.User, error)
+	Delete(ctx context.Context, actor model.Actor, id uint) error
+}
+
+// Deps reúne as dependências do service. Provision usa apenas Repo e
+// PasswordSecret, então o seeder não precisa informar as demais.
+type Deps struct {
+	Repo           repository.Repository
+	PasswordSecret string
+	Tokens         *token.Manager
+	RefreshGrace   time.Duration
+	Mailer         mailer.Mailer
 }
 
 type service struct {
 	repo           repository.Repository
 	passwordSecret []byte
+	tokens         *token.Manager
+	refreshGrace   time.Duration
+	mailer         mailer.Mailer
 }
 
-func New(repo repository.Repository, passwordSecret string) Service {
+func New(deps Deps) Service {
 	return &service{
-		repo:           repo,
-		passwordSecret: []byte(passwordSecret),
+		repo:           deps.Repo,
+		passwordSecret: []byte(deps.PasswordSecret),
+		tokens:         deps.Tokens,
+		refreshGrace:   deps.RefreshGrace,
+		mailer:         deps.Mailer,
 	}
 }
 
-func (s *service) Create(ctx context.Context, input model.CreateUserInput) (*model.User, error) {
-	input.Login = strings.TrimSpace(input.Login)
-	input.Name = strings.TrimSpace(input.Name)
-	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
-	if input.Role == "" {
-		input.Role = model.RoleUser
-	}
+func (s *service) Login(ctx context.Context, input model.LoginInput) (*model.LoginOutput, error) {
+	input = usecase.NormalizeLoginInput(input)
 
-	vErr := usererrors.NewValidationError()
-	validateLogin(vErr, input.Login)
-	validateName(vErr, input.Name)
-	validateEmail(vErr, input.Email)
-	validatePassword(vErr, input.Password)
-	validateRole(vErr, input.Role)
-	if err := vErr.OrNil(); err != nil {
+	if err := usecase.ValidateLoginInput(input); err != nil {
 		return nil, err
 	}
 
-	if err := s.ensureUnique(ctx, input.Login, input.Email, 0); err != nil {
+	user, err := usecase.AuthenticateUser(ctx, s.repo, s.passwordSecret, input)
+	if err != nil {
 		return nil, err
 	}
 
-	hash, err := s.hashPassword(input.Password)
+	return usecase.IssueToken(s.tokens, user)
+}
+
+// Refresh troca um token válido, ou expirado dentro da janela de renovação, por
+// um novo. O usuário é recarregado do banco: se foi removido a renovação falha,
+// e se o papel mudou o novo token já sai com o papel atualizado.
+func (s *service) Refresh(ctx context.Context, rawToken string) (*model.LoginOutput, error) {
+	claims, err := usecase.ParseRefreshToken(s.tokens, rawToken, s.refreshGrace)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := usecase.FindSessionUser(ctx, s.repo, claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	return usecase.IssueToken(s.tokens, user)
+}
+
+// Create cadastra o usuário (apenas admin) e envia o e-mail de boas-vindas em
+// segundo plano.
+func (s *service) Create(ctx context.Context, actor model.Actor, input model.CreateUserInput) (*model.User, error) {
+	if err := usecase.AuthorizeAdmin(actor); err != nil {
+		return nil, err
+	}
+
+	user, err := s.Provision(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	go usecase.SendWelcomeEmail(s.mailer, *user)
+
+	return user, nil
+}
+
+// Provision cadastra um usuário sem ator e sem notificação. Existe para fluxos
+// internos, como o seeder. As rotas da API devem usar Create.
+func (s *service) Provision(ctx context.Context, input model.CreateUserInput) (*model.User, error) {
+	input = usecase.NormalizeCreateUser(input)
+
+	if err := usecase.ValidateCreateUser(input); err != nil {
+		return nil, err
+	}
+	if err := usecase.EnsureUserUnique(ctx, s.repo, input.Login, input.Email, 0); err != nil {
+		return nil, err
+	}
+
+	hash, err := usecase.HashPassword(input.Password, s.passwordSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -85,217 +127,85 @@ func (s *service) Create(ctx context.Context, input model.CreateUserInput) (*mod
 		Password: hash,
 		Role:     input.Role,
 	}
-
-	if err := s.repo.Create(ctx, user); err != nil {
-		return nil, translateDBError(err)
+	if err := usecase.AddUser(ctx, s.repo, user); err != nil {
+		return nil, err
 	}
 
 	return user, nil
 }
 
-func (s *service) Update(ctx context.Context, id uint, input model.UpdateUserInput) (*model.User, error) {
-	user, err := s.repo.FindByID(ctx, id)
+func (s *service) Get(ctx context.Context, actor model.Actor, id uint) (*model.User, error) {
+	if err := usecase.AuthorizeUserAccess(actor, id); err != nil {
+		return nil, err
+	}
+
+	return usecase.FindUser(ctx, s.repo, id)
+}
+
+func (s *service) List(ctx context.Context, actor model.Actor, input model.ListUsersInput) (*response.Paginated, error) {
+	if err := usecase.AuthorizeAdmin(actor); err != nil {
+		return nil, err
+	}
+
+	input = usecase.NormalizePagination(input)
+
+	users, total, err := usecase.ListUsers(ctx, s.repo, input)
 	if err != nil {
 		return nil, err
 	}
 
-	vErr := usererrors.NewValidationError()
+	return &response.Paginated{
+		Items:   users,
+		Total:   total,
+		Page:    input.Page,
+		PerPage: input.PerPage,
+	}, nil
+}
 
-	if input.Login != nil {
-		user.Login = strings.TrimSpace(*input.Login)
-		validateLogin(vErr, user.Login)
+// Update permite que o admin altere qualquer usuário e que o usuário comum
+// altere apenas os próprios dados, sem mudar o próprio papel.
+func (s *service) Update(ctx context.Context, actor model.Actor, id uint, input model.UpdateUserInput) (*model.User, error) {
+	if err := usecase.AuthorizeUserAccess(actor, id); err != nil {
+		return nil, err
 	}
-	if input.Name != nil {
-		user.Name = strings.TrimSpace(*input.Name)
-		validateName(vErr, user.Name)
-	}
-	if input.Email != nil {
-		user.Email = strings.ToLower(strings.TrimSpace(*input.Email))
-		validateEmail(vErr, user.Email)
-	}
-	if input.Role != nil {
-		user.Role = *input.Role
-		validateRole(vErr, user.Role)
-	}
-	if input.Password != nil {
-		validatePassword(vErr, *input.Password)
-	}
-	if err := vErr.OrNil(); err != nil {
+	if err := usecase.AuthorizeRoleChange(actor, input.Role); err != nil {
 		return nil, err
 	}
 
-	if err := s.ensureUnique(ctx, user.Login, user.Email, user.ID); err != nil {
+	user, err := usecase.FindUser(ctx, s.repo, id)
+	if err != nil {
+		return nil, err
+	}
+
+	usecase.ApplyUserChanges(user, input)
+
+	if err := usecase.ValidateUpdateUser(user, input); err != nil {
+		return nil, err
+	}
+	if err := usecase.EnsureUserUnique(ctx, s.repo, user.Login, user.Email, user.ID); err != nil {
 		return nil, err
 	}
 
 	if input.Password != nil {
-		if user.Password, err = s.hashPassword(*input.Password); err != nil {
+		if user.Password, err = usecase.HashPassword(*input.Password, s.passwordSecret); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := s.repo.Update(ctx, user); err != nil {
-		return nil, translateDBError(err)
+	if err := usecase.SaveUser(ctx, s.repo, user); err != nil {
+		return nil, err
 	}
 
 	return user, nil
 }
 
-func (s *service) Delete(ctx context.Context, id uint) error {
-	return s.repo.Delete(ctx, id)
-}
-
-func (s *service) GetByID(ctx context.Context, id uint) (*model.User, error) {
-	return s.repo.FindByID(ctx, id)
-}
-
-// List normaliza a paginação e devolve os valores efetivamente usados.
-func (s *service) List(ctx context.Context, input model.ListUsersInput) ([]model.User, int64, model.ListUsersInput, error) {
-	if input.Page < 1 {
-		input.Page = 1
-	}
-	if input.PerPage < 1 {
-		input.PerPage = defaultPerPage
-	}
-	if input.PerPage > maxPerPage {
-		input.PerPage = maxPerPage
-	}
-
-	users, total, err := s.repo.List(ctx, (input.Page-1)*input.PerPage, input.PerPage)
-	return users, total, input, err
-}
-
-// Authenticate valida login e senha. Retorna sempre ErrInvalidCredentials
-// (sem distinguir usuário inexistente de senha errada).
-func (s *service) Authenticate(ctx context.Context, login, password string) (*model.User, error) {
-	login = strings.TrimSpace(login)
-
-	vErr := usererrors.NewValidationError()
-	if login == "" {
-		vErr.Add("login", "obrigatório")
-	}
-	if password == "" {
-		vErr.Add("password", "obrigatório")
-	}
-	if err := vErr.OrNil(); err != nil {
-		return nil, err
-	}
-
-	user, err := s.repo.FindByLogin(ctx, login)
-	if errors.Is(err, usererrors.ErrNotFound) {
-		// Executa um bcrypt mesmo assim para não vazar, pelo tempo de
-		// resposta, se o login existe.
-		_ = bcrypt.CompareHashAndPassword(dummyHash, s.pepper(password))
-		return nil, usererrors.ErrInvalidCredentials
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if !s.checkPassword(user.Password, password) {
-		return nil, usererrors.ErrInvalidCredentials
-	}
-
-	return user, nil
-}
-
-// --- senha -----------------------------------------------------------------
-
-// dummyHash é usado apenas para igualar o tempo de resposta quando o login não existe.
-var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
-
-// pepper aplica HMAC-SHA256 com PASSWORD_SECRET antes do bcrypt. Isso adiciona
-// o "pepper" e mantém a entrada abaixo do limite de 72 bytes do bcrypt.
-func (s *service) pepper(password string) []byte {
-	mac := hmac.New(sha256.New, s.passwordSecret)
-	mac.Write([]byte(password))
-	return []byte(base64.StdEncoding.EncodeToString(mac.Sum(nil)))
-}
-
-func (s *service) hashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword(s.pepper(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hash), nil
-}
-
-func (s *service) checkPassword(hash, password string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(hash), s.pepper(password)) == nil
-}
-
-// --- unicidade / validação -------------------------------------------------
-
-func (s *service) ensureUnique(ctx context.Context, login, email string, exceptID uint) error {
-	exists, err := s.repo.ExistsByLogin(ctx, login, exceptID)
-	if err != nil {
+func (s *service) Delete(ctx context.Context, actor model.Actor, id uint) error {
+	if err := usecase.AuthorizeAdmin(actor); err != nil {
 		return err
 	}
-	if exists {
-		return usererrors.ErrLoginTaken
-	}
-
-	exists, err = s.repo.ExistsByEmail(ctx, email, exceptID)
-	if err != nil {
+	if err := usecase.EnsureNotSelf(actor, id); err != nil {
 		return err
 	}
-	if exists {
-		return usererrors.ErrEmailTaken
-	}
 
-	return nil
-}
-
-// translateDBError cobre a corrida entre ensureUnique e o INSERT/UPDATE:
-// o único índice único da tabela é o de email.
-func translateDBError(err error) error {
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return usererrors.ErrEmailTaken
-	}
-	return err
-}
-
-func validateLogin(vErr *usererrors.ValidationError, login string) {
-	if !loginPattern.MatchString(login) {
-		vErr.Add("login", "deve ter de 3 a 100 caracteres (letras, números, '.', '_' ou '-')")
-	}
-}
-
-func validateName(vErr *usererrors.ValidationError, name string) {
-	if name == "" {
-		vErr.Add("name", "obrigatório")
-	} else if utf8.RuneCountInString(name) > 100 {
-		vErr.Add("name", "deve ter no máximo 100 caracteres")
-	}
-}
-
-// Email é obrigatório: a coluna tem índice único e o tipo string grava ""
-// quando vazio, o que faria dois usuários sem email colidirem.
-func validateEmail(vErr *usererrors.ValidationError, email string) {
-	if email == "" {
-		vErr.Add("email", "obrigatório")
-		return
-	}
-	if utf8.RuneCountInString(email) > 150 {
-		vErr.Add("email", "deve ter no máximo 150 caracteres")
-		return
-	}
-	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email {
-		vErr.Add("email", "formato inválido")
-	}
-}
-
-func validatePassword(vErr *usererrors.ValidationError, password string) {
-	n := utf8.RuneCountInString(password)
-	if n < minPasswordLength {
-		vErr.Add("password", "deve ter no mínimo 8 caracteres")
-	} else if n > maxPasswordLength {
-		vErr.Add("password", "deve ter no máximo 128 caracteres")
-	}
-}
-
-func validateRole(vErr *usererrors.ValidationError, role model.Role) {
-	if !role.IsValid() {
-		vErr.Add("role", "deve ser 'admin' ou 'user'")
-	}
+	return usecase.RemoveUser(ctx, s.repo, id)
 }

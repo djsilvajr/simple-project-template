@@ -19,15 +19,15 @@ back/
 │   ├── migrate.go             AutoMigrate dos models (lista `models`)
 │   └── seeder.go              seeders idempotentes (lista `seeders`)
 └── internal/
-    ├── config/config.go       Load() + getEnvStr / getEnvBool / getEnvInt
+    ├── config/config.go       Load(): env tipado e validado (valor inválido impede a subida)
     ├── domain/
     │   └── user/
     │       ├── errors/        erros de domínio (sentinelas + ValidationError)
-    │       ├── handler/       "controller": lê request, chama use case, escreve response
+    │       ├── handler/       "controller": lê request, chama service, escreve response
     │       ├── model/         entidade User + DTOs de entrada/saída
     │       ├── repository/    interface + implementação GORM
-    │       ├── service/       regras de domínio reutilizáveis (validação, unicidade, hash)
-    │       └── usecase/       fluxos da aplicação + autorização (um arquivo por caso de uso)
+    │       ├── service/       orquestra cada operação chamando um ou mais use cases
+    │       └── usecase/       funções de responsabilidade única (uma por arquivo)
     ├── infra/
     │   ├── database/          conexão GORM + pool + retry
     │   ├── mailer/            SMTP (ou log quando MAIL_ENABLED=false)
@@ -43,12 +43,31 @@ back/
 nginx /api/users → proxy_pass http://back:8080/users   (prefixo /api removido)
   → providers (Boot)        Logger (início) → CORS
     → middlewares da rota   RateLimit → Auth → RequireRole
-      → handler             decodifica JSON, monta Actor, chama use case
-        → usecase           autorização (admin / próprio usuário) + orquestração
-          → service         validação, unicidade, hash de senha
+      → handler             decodifica JSON, monta Actor, chama o service
+        → service           define a ordem dos passos da operação
+          → [use cases]     um passo cada: autorizar, validar, gravar, gerar token...
             → repository    GORM → MySQL
   ← providers (fim)         Logger imprime status e duração
 ```
+
+## Service e use cases
+O use case é uma função de responsabilidade única, em um arquivo próprio dentro de `domain/<x>/usecase/`, com as dependências recebidas por parâmetro. O service é quem chama os use cases, quantos a operação precisar:
+
+```go
+func (s *service) Delete(ctx context.Context, actor model.Actor, id uint) error {
+	if err := usecase.AuthorizeAdmin(actor); err != nil {
+		return err
+	}
+	if err := usecase.EnsureNotSelf(actor, id); err != nil {
+		return err
+	}
+	return usecase.RemoveUser(ctx, s.repo, id)
+}
+```
+
+- O handler chama apenas o service.
+- Um use case não chama o service nem outro use case.
+- Regras compartilhadas por vários use cases ficam em funções não exportadas do pacote (ex.: `validation_rules.go`).
 
 ## Providers vs. middlewares
 | | Providers (`internal/providers`) | Middlewares (`internal/middleware`) |
@@ -78,12 +97,17 @@ Listagens usam `response.Paginated{Items, Total, Page, PerPage}` dentro de `data
 | qualquer outro | 500 (logado, mensagem genérica) |
 
 ## Variáveis de ambiente
-Veja `back/.env.example` — todas comentadas. Obrigatórias: `DB_DATABASE`, `DB_USERNAME`, `JWT_SECRET`, `PASSWORD_SECRET` (e `MAIL_HOST` se `MAIL_ENABLED=true`).
+Veja `back/.env.example` — todas comentadas. Obrigatórias: `DB_DATABASE`, `DB_USERNAME`, `JWT_SECRET` (mínimo de 32 bytes), `PASSWORD_SECRET` (e `MAIL_HOST` se `MAIL_ENABLED=true`).
+
+`config.Load` é usado pela API e pelo executável de migrations. Se algum valor estiver incorreto, o processo encerra com erro listando todos os problemas de uma vez:
+- Variável ausente usa o valor padrão, exceto as obrigatórias.
+- Número ou booleano inválido ou vazio é erro, assim como lista vazia (ex.: `CORS_ALLOWED_ORIGINS=`).
+- Faixas também são conferidas (portas, expiração do JWT, pool de conexões, origens de CORS). As regras de rate limit e de e-mail só valem com o recurso habilitado.
 
 ## Como adicionar um novo domínio
 1. Crie `internal/domain/<nome>/` com `errors/`, `model/`, `repository/`, `service/`, `usecase/`, `handler/`
 2. Adicione o model em `migration/migrate.go` (`models`)
-3. Instancie repository → service → use cases → handler em `router.Setup`
+3. Instancie repository → service → handler em `router.Setup`
 4. Registre as rotas em `router.Setup` com os middlewares necessários
 
 Referência: `internal/domain/user`.

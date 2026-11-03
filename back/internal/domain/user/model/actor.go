@@ -1,15 +1,13 @@
-package usecase
-
-import "github.com/djsilvajr/simple-project-template/back/internal/domain/user/model"
+package model
 
 // Actor é o usuário autenticado que está executando a ação.
 type Actor struct {
 	ID   uint
-	Role model.Role
+	Role Role
 }
 
 func (a Actor) IsAdmin() bool {
-	return a.Role == model.RoleAdmin
+	return a.Role == RoleAdmin
 }
 
 // CanAccess indica se o ator pode ver/alterar o usuário informado:
